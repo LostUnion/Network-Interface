@@ -1,30 +1,25 @@
 package main
 
 import (
-	// "log"
+	"os"
 	"fmt"
-	"syscall"
-	"unsafe"
-	"time"
 	"runtime"
-
+	"syscall"
+	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 var (
 	wintun_module                 = syscall.NewLazyDLL("wintun.dll")
-	iphlpapiDLL                   = syscall.NewLazyDLL("iphlpapi.dll")
-	procGetAdaptersAddresses 	  = iphlpapiDLL.NewProc("GetAdaptersAddresses")
 	wintunCreateAdapter           = wintun_module.NewProc("WintunCreateAdapter")
-	wintunOpenAdapter			  = wintun_module.NewProc("WintunOpenAdapter")
+	wintunOpenAdapter             = wintun_module.NewProc("WintunOpenAdapter")
 	wintunCloseAdapter            = wintun_module.NewProc("WintunCloseAdapter")
 	wintunGetRunningDriverVersion = wintun_module.NewProc("WintunGetRunningDriverVersion")
 	wintunGetAdapterLuid          = wintun_module.NewProc("WintunGetAdapterLUID")
 	wintunEnumAdapters            = wintun_module.NewProc("WintunEnumAdapters")
-	wintunDeleteDriver			  = wintun_module.NewProc("WintunDeleteDriver")
-
-	createIpAddressEntry = iphlpapiDLL.NewProc("CreateUnicastIpAddressEntry")
+	wintunDeleteDriver            = wintun_module.NewProc("WintunDeleteDriver")
 
 	wintunAllocateSendPacket   = wintun_module.NewProc("WintunAllocateSendPacket")
 	wintunEndSession           = wintun_module.NewProc("WintunEndSession")
@@ -51,234 +46,250 @@ const (
 	RingCapacityMax = 0x4000000 // Maximum ring capacity (64 MiB)
 )
 
-// Packet with data
 type Packet struct {
 	Next *Packet              // Pointer to next packet in queue
 	Size uint32               // Size of packet (max WINTUN_MAX_IP_PACKET_SIZE)
 	Data *[PacketSizeMax]byte // Pointer to layer 3 IPv4 or IPv6 packet
 }
 
-// const (
-// 	AF_UNSPEC = 0
-// 	GAA_FLAG_INCLUDE_PREFIX = 0x0010
-// )
-
-// type SOCKET_ADDRESS struct {
-// 	LpSockaddr *syscall.RawSockaddrAny
-// 	Iaddrlen   int32
-// }
-
-// type IP_ADAPTER_UNICAST_ADDRESS struct {
-// 	Length             uint32
-// 	Flags              uint32
-// 	Next               *IP_ADAPTER_UNICAST_ADDRESS
-// 	Address            SOCKET_ADDRESS
-// 	PrefixOrigin       int32
-// 	SuffixOrigin       int32
-// 	DadState           int32
-// 	ValidLifetime      uint32
-// 	PreferredLifetime  uint32
-// 	LeaseLifetime      uint32
-// 	OnLinkPrefixLength uint8
-// }
-
-// type IP_ADAPTER_ANYCAST_ADDRESS struct {
-// 	Length  uint32
-// 	Flags   uint32
-// 	Next    *IP_ADAPTER_ANYCAST_ADDRESS
-// 	Address SOCKET_ADDRESS
-// }
-
-// type IP_ADAPTER_MULTICAST_ADDRESS struct {
-// 	Length  uint32
-// 	Flags   uint32
-// 	Next    *IP_ADAPTER_MULTICAST_ADDRESS
-// 	Address SOCKET_ADDRESS
-// }
-
-// type IP_ADAPTER_DNS_SERVER_ADDRESS struct {
-// 	Length  uint32
-// 	Flags   uint32
-// 	Next    *IP_ADAPTER_DNS_SERVER_ADDRESS
-// 	Address SOCKET_ADDRESS
-// }
-
-// type IP_ADAPTER_PREFIX struct {
-// 	Length  uint32
-// 	Flags   uint32
-// 	Next    *IP_ADAPTER_PREFIX
-// 	Address SOCKET_ADDRESS
-// 	PrefixLength uint32
-// }
-
-// type IP_ADAPTER_WINS_SERVER_ADDRESS struct {
-// 	Length  uint32
-// 	Flags   uint32
-// 	Next    *IP_ADAPTER_WINS_SERVER_ADDRESS
-// 	Address SOCKET_ADDRESS
-// }
-
-// type IP_ADAPTER_GATEWAY_ADDRESS struct {
-// 	Length  uint32
-// 	Flags   uint32
-// 	Next    *IP_ADAPTER_GATEWAY_ADDRESS
-// 	Address SOCKET_ADDRESS
-// }
-
-// type IP_ADAPTER_ADDRESSES struct {
-// 	Length                uint32
-// 	IfIndex               uint32
-// 	Next                  *IP_ADAPTER_ADDRESSES
-// 	AdapterName           *byte
-// 	FirstUnicastAddress   *IP_ADAPTER_UNICAST_ADDRESS
-// 	FirstAnycastAddress   *IP_ADAPTER_ANYCAST_ADDRESS
-// 	FirstMulticastAddress *IP_ADAPTER_MULTICAST_ADDRESS
-// 	FirstDnsServerAddress *IP_ADAPTER_DNS_SERVER_ADDRESS
-// 	DnsSuffix             *uint16
-// 	Description           *uint16
-// 	FriendlyName          *uint16
-// 	PhysicalAddress       [syscall.MAX_ADAPTER_ADDRESS_LENGTH]byte
-// 	PhysicalAddressLength uint32
-// 	Flags                 uint32
-// 	Mtu                   uint32
-// 	IfType                uint32
-// 	OperStatus            uint32
-// 	Ipv6IfIndex           uint32
-// 	ZoneIndices           [16]uint32
-// 	FirstPrefix           *IP_ADAPTER_PREFIX
-// 	TransmitLinkSpeed     uint64
-// 	ReceiveLinkSpeed      uint64
-// 	FirstWinsServerAddress *IP_ADAPTER_WINS_SERVER_ADDRESS
-// 	FirstGatewayAddress   *IP_ADAPTER_GATEWAY_ADDRESS
-// 	Ipv4Metric            uint32
-// 	Ipv6Metric            uint32
-// 	Luid                  uint64
-// 	Dhcpv4Server          SOCKET_ADDRESS
-// 	CompartmentId         uint32
-// 	NetworkGuid           windows.GUID
-// 	ConnectionType        uint32
-// 	TunnelType            uint32
-// 	Dhcpv6Server          SOCKET_ADDRESS
-// 	Dhcpv6ClientDuid      []byte
-// 	Dhcpv6ClientDuidLength uint32
-// 	Dhcpv6Iaid            uint32
-// }
-
-func closeAdapter(main *Adapter) {
-	syscall.Syscall(wintunCloseAdapter.Addr(), 1, main.handle, 0, 0)
+func closeAdapter(wintun *Adapter) {
+	syscall.Syscall(wintunCloseAdapter.Addr(), 1, wintun.handle, 0, 0)
 }
 
-func CreateAdapter(name string, tunnelType string, requestedGUID *windows.GUID) (wintun *Adapter, err error) {
-	var name16 *uint16
-	name16, err = windows.UTF16PtrFromString(name)
+func CreateAdapter(
+	adapter_name string,
+	tunnel_Type string,
+	GUID *windows.GUID) (wintun *Adapter,
+		   				 err error) {
+
+	var adapter_name_16 *uint16
+
+	adapter_name_16, err = windows.UTF16PtrFromString(adapter_name)
 	if err != nil {
-		return
-	}
-	var tunnelType16 *uint16
-	tunnelType16, err = windows.UTF16PtrFromString(tunnelType)
-	if err != nil {
-		return
-	}
-	r0, _, e1 := syscall.Syscall(wintunCreateAdapter.Addr(), 3, uintptr(unsafe.Pointer(name16)), uintptr(unsafe.Pointer(tunnelType16)), uintptr(unsafe.Pointer(requestedGUID)))
-	if r0 == 0 {
-		err = e1
 		return
 	}
 
-	
-	wintun = &Adapter{handle: r0}
+	var tunnel_Type_16 *uint16
+	tunnel_Type_16, err = windows.UTF16PtrFromString(tunnel_Type)
+	if err != nil {
+		return
+	}
+
+	result, _, err_ := syscall.Syscall(
+		wintunCreateAdapter.Addr(),
+		3,
+		uintptr(unsafe.Pointer(adapter_name_16)),
+		uintptr(unsafe.Pointer(tunnel_Type_16)),
+		uintptr(unsafe.Pointer(GUID)),
+	)
+
+	if result == 0 {
+		err = err_
+		return
+	}
+
+	wintun = &Adapter{handle: result}
 	runtime.SetFinalizer(wintun, closeAdapter)
 	return
 }
 
 // OpenAdapter opens an existing Wintun adapter by name.
-func OpenAdapter(name string) (wintun *Adapter, err error) {
-	var name16 *uint16
-	name16, err = windows.UTF16PtrFromString(name)
+func OpenAdapter(adapter_name string) (wintun *Adapter, err error) {
+
+	var adapter_name_16 *uint16
+
+	adapter_name_16, err = windows.UTF16PtrFromString(adapter_name)
 	if err != nil {
 		return
 	}
-	r0, _, e1 := syscall.Syscall(wintunOpenAdapter.Addr(), 1, uintptr(unsafe.Pointer(name16)), 0, 0)
-	if r0 == 0 {
-		err = e1
+
+	result, _, err_ := syscall.Syscall(
+		wintunOpenAdapter.Addr(),
+		1,
+		uintptr(unsafe.Pointer(adapter_name_16)),
+		0,
+		0,
+	)
+
+	if result == 0 {
+		err = err_
 		return
 	}
-	wintun = &Adapter{handle: r0}
+
+	wintun = &Adapter{handle: result}
 	runtime.SetFinalizer(wintun, closeAdapter)
 	return
 }
 
 func (wintun *Adapter) Close() (err error) {
 	runtime.SetFinalizer(wintun, nil)
-	r1, _, e1 := syscall.Syscall(wintunCloseAdapter.Addr(), 1, wintun.handle, 0, 0)
-	if r1 == 0 {
-		err = e1
+
+	result, _, err_ := syscall.Syscall(
+		wintunCloseAdapter.Addr(),
+		1,
+		wintun.handle,
+		0,
+		0,
+	)
+
+	if result == 0 {
+		err = err_
 	}
 	return
 }
 
 func Uninstall() (err error) {
-	r1, _, e1 := syscall.Syscall(wintunDeleteDriver.Addr(), 0, 0, 0, 0)
-	if r1 == 0 {
-		err = e1
+	result, _, err_ := syscall.Syscall(
+		wintunDeleteDriver.Addr(),
+		0,
+		0,
+		0,
+		0,
+	)
+
+	if result == 0 {
+		err = err_
 	}
 	return
 }
 
 func RunningVersion() (version uint32, err error) {
-	r0, _, e1 := syscall.Syscall(wintunGetRunningDriverVersion.Addr(), 0, 0, 0, 0)
-	version = uint32(r0)
+	result, _, err_ := syscall.Syscall(
+		wintunGetRunningDriverVersion.Addr(),
+		0,
+		0,
+		0,
+		0,
+	)
+
+	version = uint32(result)
+
 	if version == 0 {
-		err = e1
+		err = err_
 	}
 	return
 }
 
 func (wintun *Adapter) LUID() (luid uint64) {
-	syscall.Syscall(wintunGetAdapterLuid.Addr(), 2, uintptr(wintun.handle), uintptr(unsafe.Pointer(&luid)), 0)
+	syscall.Syscall(
+		wintunGetAdapterLuid.Addr(),
+		2,
+		uintptr(wintun.handle),
+		uintptr(unsafe.Pointer(&luid)),
+		0,
+	)
 	return
 }
 
 func (wintun *Adapter) StartSession(capacity uint32) (session Session, err error) {
-	r0, _, e1 := syscall.Syscall(wintunStartSession.Addr(), 2, uintptr(wintun.handle), uintptr(capacity), 0)
-	if r0 == 0 {
-		err = e1
+	result, _, err_ := syscall.Syscall(
+		wintunStartSession.Addr(),
+		2,
+		uintptr(wintun.handle),
+		uintptr(capacity),
+		0,
+	)
+
+	if result == 0 {
+		err = err_
 	} else {
-		session = Session{r0}
+		session = Session{result}
 	}
 	return
 }
 
 func (session Session) End() {
-	syscall.Syscall(wintunEndSession.Addr(), 1, session.handle, 0, 0)
+	syscall.Syscall(
+		wintunEndSession.Addr(),
+		1,
+		session.handle,
+		0,
+		0,
+	)
+
 	session.handle = 0
 }
 
 func main() {
+
+
 	var guid windows.GUID
-	adapter, err := CreateAdapter("TestNetwork", "Wintun", &guid)
-	fmt.Println(adapter, err)
+
+	adapter_name := "Test VPN Service"
+	adapter_type := "Wintun"
+
+	fmt.Printf("[TUN] Creating a network interface named \"%s\"...\n", adapter_name)
+	adapter, err := CreateAdapter(adapter_name, adapter_type, &guid)
+	if err != nil {
+		fmt.Printf("[TUN] An error occurred when creating the \"%s\" interface.\n[Error] %s\n", adapter_name, err)
+		fmt.Printf("[FATAL ERROR][TUN] func \"CreateAdapter\" failed. Exiting the program.\n")
+		if adapter != nil {
+			adapter.Close()
+		}
+		os.Exit(1)
+	} else {
+		fmt.Printf("[TUN][INTF: %d] The \"%s\" interface was created successfully.\n", adapter.handle, adapter_name)
+	}
 
 	time.Sleep(1 * time.Second)
 
-	version, err := RunningVersion()
-	fmt.Println(version, err)
+	version_driver, err := RunningVersion()
+	if err != nil {
+		fmt.Printf("[TUN] An error occurred while getting the Wintun driver version.\n[Error] %s\n", err)
+		fmt.Printf("[ERROR][TUN] func \"RunningVersion\" failed.\n")
+	} else {
+		fmt.Printf("[TUN][INTF: %d] Installed Wintun driver version %d.\n", adapter.handle, version_driver)
+	}
+
+	// time.Sleep(1 * time.Second)
+
+	// open_adapter, err := OpenAdapter(adapter_name)
+	// fmt.Println(open_adapter, err)
 
 	time.Sleep(1 * time.Second)
 
-	open_adapter, err := OpenAdapter("TestNetwork")
-	fmt.Println(open_adapter, err)
+	fmt.Printf("[TUN][INTF: %d] Initializing session startup on interface.\n", adapter.handle)
+	start_session, err := adapter.StartSession(RingCapacityMax)
+	if err != nil {
+		fmt.Printf("[TUN][INTF: %d] It is not possible to start a session on the interface.\n[Error] %s\n", adapter.handle, err)
+		fmt.Printf("[FATAL ERROR][TUN] func \"StartSession\" failed. Exiting the program.\n")
+		if adapter != nil {
+			adapter.Close()
+		}
+		if start_session.handle != 0 {
+			start_session.End()
+		}
+		os.Exit(1)
+	} else {
+		fmt.Printf("[TUN][INTF: %d][SESS: %d] Session is running on the interface.\n", adapter.handle, start_session.handle)
+	}
 
 	time.Sleep(1 * time.Second)
 
-	start_session_open_adapter, err := open_adapter.StartSession(0x4000000)
-	fmt.Println(start_session_open_adapter, err)
+	fmt.Printf("[TUN][INTF: %d][SESS: %d] Initializing the session stop in the interface.\n", adapter.handle, start_session.handle)
+	start_session.End()
+	fmt.Printf("[TUN][INTF: %d] The session was successfully closed.\n", adapter.handle)
 
 	time.Sleep(1 * time.Second)
 
-	res := adapter.Close()
-	o_res := open_adapter.Close()
-	fmt.Println(res, o_res)
-	Uninstall()
-	
+	fmt.Printf("[TUN][INTF: %d] Initializing the stop the interface.\n", adapter.handle)
+	close_err := adapter.Close()
+	if close_err != nil {
+		fmt.Printf("[TUN][INTF: %d] Interface shutdown failed.\n[Error] %s\n", adapter.handle, close_err)
+		fmt.Printf("[FATAL ERROR][TUN] func \"Close\" failed. Exiting the program.\n")
+	} else {
+		fmt.Printf("[TUN] The interface is successfully closed.\n")
+	}
+
+	time.Sleep(1 * time.Second)
+
+	fmt.Printf("[TUN] Initialized removal of the wintun driver.\n")
+	unistall_err := Uninstall()
+	if unistall_err != nil {
+		fmt.Printf("[TUN] The driver has not been deleted.\n[Error] %s\n", unistall_err)
+		fmt.Printf("[FATAL ERROR][TUN] func \"Uninstall\" failed. Exiting the program.\n")
+	} else {
+		fmt.Printf("[TUN] The driver was successfully deleted.")
+	}
+
 }
